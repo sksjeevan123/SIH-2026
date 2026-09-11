@@ -17,3 +17,4 @@ torch>=2.2.0
 torchaudio>=2.2.0
 packaging>=23.2
 python-multipart>=0.0.6
+librosa>=1

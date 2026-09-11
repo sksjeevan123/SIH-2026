@@ -5,6 +5,7 @@ import io
 from app.audio.stream_buffer import StreamBuffer
 from app.audio.vad_filter import VADFilter
 from app.audio.feature_extractor import FeatureExtractor
+from app.ml.inference import analyze_voice_authenticity
 
 router = APIRouter(prefix="/api", tags=["Audio Channeling"])
 
@@ -48,11 +49,14 @@ async def channel_audio_to_ml(
             return {"status": "filtered", "message": "No active speech detected."}
 
         feature_matrix = feature_extractor.extract_and_stack(clean_audio)
+        ml_result = await analyze_voice_authenticity(clean_audio, sample_rate=sr)
 
         return {
             "status": "success",
             "message": "Authenticated and processed successfully.",
-            "feature_matrix_shape": list(feature_matrix.shape)
+            "feature_matrix_shape": list(feature_matrix.shape),
+            "prosody_metrics": prosody_metrics,
+            "ml_inference": ml_result,
         }
 
     except Exception as e:

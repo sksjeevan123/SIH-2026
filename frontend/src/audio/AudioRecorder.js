@@ -242,7 +242,7 @@ class AudioRecorder {
                     ? JSON.parse(data)
                     : data;
 
-            if (result?.type === "result") {
+            if (result?.type === "result" || result?.type === "error") {
                 this.onResult(result);
             }
 

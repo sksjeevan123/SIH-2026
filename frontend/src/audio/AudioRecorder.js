@@ -3,7 +3,7 @@ import websocketService from "../services/websocket.js";
 class AudioRecorder {
     constructor({
         sampleRate = 16000,
-        chunkDurationMs = 2000,
+        chunkDurationMs = 4000,
         onStatus = () => {},
         onChunk = () => {},
         onResult = () => {},
@@ -21,15 +21,24 @@ class AudioRecorder {
         this.audioContext = null;
         this.source = null;
         this.worklet = null;
+        this.silentGain = null;
 
-        this.buffer = [];
+        this.buffer = new Float32Array(0);
         this.bufferSamples = 0;
+
+        this.requiredSamples =
+            Math.round(
+                this.sampleRate *
+                this.chunkDurationMs /
+                1000
+            );
 
         this.chunkId = 0;
         this.callStartTime = 0;
 
         this.running = false;
         this.stopping = false;
+        this.messageHandler = null;
     }
 
     async start() {
@@ -39,24 +48,40 @@ class AudioRecorder {
 
         try {
             this.stopping = false;
+
             this.onStatus("Requesting microphone...");
 
-            this.stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    channelCount: 1,
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: false
-                }
-            });
+            this.stream =
+                await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: this.sampleRate,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: false
+                    }
+                });
 
-            this.audioContext = new AudioContext({
-                sampleRate: this.sampleRate,
-                latencyHint: "interactive"
-            });
+            this.audioContext =
+                new AudioContext({
+                    sampleRate: this.sampleRate,
+                    latencyHint: "interactive"
+                });
+
+            if (
+                this.audioContext.sampleRate !==
+                this.sampleRate
+            ) {
+                throw new Error(
+                    `Unsupported sample rate: ${this.audioContext.sampleRate} Hz`
+                );
+            }
 
             await this.audioContext.audioWorklet.addModule(
-                new URL("./audioProcessor.js", import.meta.url)
+                new URL(
+                    "./audioProcessor.js",
+                    import.meta.url
+                )
             );
 
             this.source =
@@ -64,46 +89,64 @@ class AudioRecorder {
                     this.stream
                 );
 
-            this.worklet = new AudioWorkletNode(
-                this.audioContext,
-                "audio-processor",
-                {
-                    numberOfInputs: 1,
-                    numberOfOutputs: 1,
-                    channelCount: 1
-                }
-            );
+            this.worklet =
+                new AudioWorkletNode(
+                    this.audioContext,
+                    "audio-processor",
+                    {
+                        numberOfInputs: 1,
+                        numberOfOutputs: 1,
+                        channelCount: 1,
+                        channelCountMode: "explicit",
+                        channelInterpretation: "speakers"
+                    }
+                );
 
-            this.worklet.port.onmessage = (event) => {
-                this.handleAudio(event.data);
-            };
+            this.worklet.port.onmessage =
+                (event) => {
+                    this.handleAudio(event.data);
+                };
 
-            this.worklet.onprocessorerror = () => {
-                this.handleError("Audio processor error");
-            };
+            this.worklet.onprocessorerror =
+                () => {
+                    this.handleError(
+                        "Audio processor error"
+                    );
+                };
 
-            const silentGain =
+            this.silentGain =
                 this.audioContext.createGain();
 
-            silentGain.gain.value = 0;
+            this.silentGain.gain.value = 0;
 
             this.source.connect(this.worklet);
-            this.worklet.connect(silentGain);
-            silentGain.connect(
+
+            this.worklet.connect(
+                this.silentGain
+            );
+
+            this.silentGain.connect(
                 this.audioContext.destination
             );
 
             await websocketService.connect();
 
-            websocketService.onMessage((data) => {
+            this.messageHandler = (data) => {
                 this.handleServerMessage(data);
-            });
+            };
 
-            if (this.audioContext.state === "suspended") {
+            websocketService.onMessage(
+                this.messageHandler
+            );
+
+            if (
+                this.audioContext.state ===
+                "suspended"
+            ) {
                 await this.audioContext.resume();
             }
 
-            this.buffer = [];
+            this.buffer = new Float32Array(0);
             this.bufferSamples = 0;
             this.chunkId = 0;
             this.callStartTime = performance.now();
@@ -112,10 +155,11 @@ class AudioRecorder {
 
             websocketService.sendJson({
                 type: "start",
-                sample_rate: this.audioContext.sampleRate,
+                sample_rate: this.sampleRate,
                 channels: 1,
                 format: "pcm_f32le",
-                chunk_duration_ms: this.chunkDurationMs
+                chunk_duration_ms:
+                    this.chunkDurationMs
             });
 
             this.onStatus("Recording");
@@ -131,60 +175,51 @@ class AudioRecorder {
         }
 
         if (!(samples instanceof Float32Array)) {
-            samples = new Float32Array(samples);
+            samples =
+                new Float32Array(samples);
         }
 
-        this.buffer.push(samples);
-        this.bufferSamples += samples.length;
+        if (samples.length === 0) {
+            return;
+        }
 
-        const requiredSamples = Math.floor(
-            this.audioContext.sampleRate *
-            this.chunkDurationMs /
-            1000
+        const combined =
+            new Float32Array(
+                this.bufferSamples +
+                samples.length
+            );
+
+        combined.set(this.buffer);
+
+        combined.set(
+            samples,
+            this.bufferSamples
         );
 
-        while (this.bufferSamples >= requiredSamples) {
+        this.buffer = combined;
+        this.bufferSamples =
+            combined.length;
+
+        while (
+            this.bufferSamples >=
+            this.requiredSamples
+        ) {
             const chunk =
-                this.extractSamples(requiredSamples);
+                this.buffer.slice(
+                    0,
+                    this.requiredSamples
+                );
+
+            this.buffer =
+                this.buffer.slice(
+                    this.requiredSamples
+                );
+
+            this.bufferSamples =
+                this.buffer.length;
 
             this.sendChunk(chunk);
         }
-    }
-
-    extractSamples(requiredSamples) {
-        const output =
-            new Float32Array(requiredSamples);
-
-        let offset = 0;
-
-        while (
-            offset < requiredSamples &&
-            this.buffer.length > 0
-        ) {
-            const current = this.buffer[0];
-
-            const copyLength = Math.min(
-                current.length,
-                requiredSamples - offset
-            );
-
-            output.set(
-                current.subarray(0, copyLength),
-                offset
-            );
-
-            offset += copyLength;
-            this.bufferSamples -= copyLength;
-
-            if (copyLength === current.length) {
-                this.buffer.shift();
-            } else {
-                this.buffer[0] =
-                    current.subarray(copyLength);
-            }
-        }
-
-        return output;
     }
 
     sendChunk(samples) {
@@ -199,17 +234,19 @@ class AudioRecorder {
             return;
         }
 
-        const timestamp = Math.round(
-            performance.now() -
-            this.callStartTime
-        );
+        const timestamp =
+            Math.round(
+                performance.now() -
+                this.callStartTime
+            );
 
         const metadata = {
             type: "audio",
             chunk_id: this.chunkId,
             timestamp_ms: timestamp,
-            duration_ms: this.chunkDurationMs,
-            sample_rate: this.audioContext.sampleRate,
+            duration_ms:
+                this.chunkDurationMs,
+            sample_rate: this.sampleRate,
             channels: 1,
             format: "pcm_f32le",
             samples: samples.length
@@ -217,17 +254,20 @@ class AudioRecorder {
 
         websocketService.sendJson(metadata);
 
-        const audioBuffer = samples.buffer.slice(
-            samples.byteOffset,
-            samples.byteOffset +
-            samples.byteLength
-        );
+        const audioBuffer =
+            samples.buffer.slice(
+                samples.byteOffset,
+                samples.byteOffset +
+                samples.byteLength
+            );
 
-        websocketService.sendBinary(audioBuffer);
+        websocketService.sendBinary(
+            audioBuffer
+        );
 
         this.onChunk({
             id: this.chunkId,
-            timestamp: timestamp,
+            timestamp,
             duration: this.chunkDurationMs,
             samples: samples.length
         });
@@ -242,7 +282,10 @@ class AudioRecorder {
                     ? JSON.parse(data)
                     : data;
 
-            if (result?.type === "result" || result?.type === "error") {
+            if (
+                result?.type === "result" ||
+                result?.type === "error"
+            ) {
                 this.onResult(result);
             }
 
@@ -255,7 +298,10 @@ class AudioRecorder {
     }
 
     stop() {
-        if (!this.running && !this.stream) {
+        if (
+            !this.running &&
+            !this.stream
+        ) {
             return;
         }
 
@@ -263,17 +309,26 @@ class AudioRecorder {
         this.running = false;
 
         if (this.worklet) {
-            this.worklet.port.postMessage({
-                type: "stop"
-            });
+            try {
+                this.worklet.port.postMessage({
+                    type: "stop"
+                });
+            } catch {}
 
             this.worklet.disconnect();
+            this.worklet.port.onmessage = null;
+            this.worklet.onprocessorerror = null;
             this.worklet = null;
         }
 
         if (this.source) {
             this.source.disconnect();
             this.source = null;
+        }
+
+        if (this.silentGain) {
+            this.silentGain.disconnect();
+            this.silentGain = null;
         }
 
         if (this.audioContext) {
@@ -284,7 +339,9 @@ class AudioRecorder {
         if (this.stream) {
             this.stream
                 .getTracks()
-                .forEach((track) => track.stop());
+                .forEach(
+                    (track) => track.stop()
+                );
 
             this.stream = null;
         }
@@ -293,12 +350,15 @@ class AudioRecorder {
             websocketService.sendJson({
                 type: "stop"
             });
+
+            websocketService.close();
         }
 
-        websocketService.close();
+        this.buffer =
+            new Float32Array(0);
 
-        this.buffer = [];
         this.bufferSamples = 0;
+        this.chunkId = 0;
 
         this.onStatus("Stopped");
     }

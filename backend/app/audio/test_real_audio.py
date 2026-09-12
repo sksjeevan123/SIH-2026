@@ -8,7 +8,7 @@ from vad_filter import VADFilter
 from feature_extractor import FeatureExtractor
 
 # 1. Set the path to your test file
-WAV_FILE_PATH = "test_voice.wav" 
+WAV_FILE_PATH = r"app\audio\test_voiceai1.wav"
 
 try:
     print("Loading file and simulating frontend Base64 encoding...")

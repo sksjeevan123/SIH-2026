@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
-MODEL_NAME = "garystafford/wav2vec2-deepfake-voice-detector"
+MODEL_NAME = "mo-thecreator/Deepfake-audio-detection"
 
 class VoiceAuthenticityModel:
     def __init__(self):

@@ -19,3 +19,7 @@ packaging>=23.2
 python-multipart>=0.0.6
 transformers>=4.38.0
 librosa>=0.1
+onnxruntime
+soundfile 
+scipy
+noisereduce

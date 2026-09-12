@@ -5,11 +5,12 @@ import os
 from app.audio.feature_extractor import FeatureExtractor
 from app.audio.vad_filter import VADFilter
 from app.ml.inference import analyze_voice_authenticity
+from RobustAudioCleaner import RobustAudioCleaner
 
 async def test_custom_audio_pipeline():
     print("--- Initializing Custom Audio Pipeline Test ---")
 
-    audio_path = r"D:\Voice\SIH-2026\backend\test_voiceh4.wav"
+    audio_path = r"D:\Voice\SIH-2026\backend\test_voiceai1.wav"
     target_sr = 16000
 
     print(f"Loading audio file: {audio_path}...")
@@ -18,8 +19,9 @@ async def test_custom_audio_pipeline():
 
     # Run VAD first, same as production
     print("\n[Step 1/3] Running VAD...")
-    vad = VADFilter()
-    clean_audio, prosody = vad.extract_speech_and_metrics(audio_array, samplerate=sample_rate)
+    cleaner = RobustAudioCleaner(target_samplerate=16000)
+    clean_audio, prosody = cleaner.clean(audio_array, samplerate=16000)
+    #clean_audio, prosody = vad.extract_speech_and_metrics(audio_array, samplerate=sample_rate)
     if clean_audio is None:
         print("No speech detected.")
         return

@@ -53,6 +53,16 @@ async def analyze_voice_authenticity(input_array: np.ndarray, sample_rate: int =
     # Step 1: Unpack 2D array into 1D PCM audio and parameter dict
     audio_array, extra_params = preprocess_2d_input(input_array)
 
+    # The processor and model must see the sampling rate used during training.
+    model_sample_rate = int(getattr(ml_singleton.feature_extractor, "sampling_rate", 16000))
+    if sample_rate != model_sample_rate:
+        audio_array = librosa.resample(
+            audio_array,
+            orig_sr=sample_rate,
+            target_sr=model_sample_rate,
+        ).astype(np.float32)
+        sample_rate = model_sample_rate
+
     # Step 2: Feature extraction for Wav2Vec2 neural net
     inputs = ml_singleton.feature_extractor(
         audio_array, 
@@ -65,8 +75,20 @@ async def analyze_voice_authenticity(input_array: np.ndarray, sample_rate: int =
         logits = ml_singleton.model(**inputs).logits
         probabilities = F.softmax(logits, dim=-1)[0]
 
-    real_prob = float(probabilities[0])
-    fake_prob = float(probabilities[1])
+    id2label = getattr(ml_singleton.model.config, "id2label", {})
+    fake_index = next(
+        (int(index) for index, label in id2label.items()
+         if any(term in str(label).lower() for term in ("fake", "synthetic", "ai"))),
+        1,
+    )
+    real_index = next(
+        (int(index) for index, label in id2label.items()
+         if any(term in str(label).lower() for term in ("real", "human", "authentic"))),
+        0,
+    )
+
+    real_prob = float(probabilities[real_index])
+    fake_prob = float(probabilities[fake_index])
     risk_score = round(fake_prob * 100, 2)
 
     # Step 4: Risk level assignment

@@ -15,6 +15,7 @@ import io
 import json
 import uuid
 import numpy as np
+import librosa
 
 from app.audio.stream_buffer import StreamBuffer
 from app.audio.vad_filter import VADFilter
@@ -35,10 +36,20 @@ async def process_audio_chunk(call_id: str, data: np.ndarray, sr: int):
     if len(data.shape) > 1:
         data = data.mean(axis=1)
 
+    # Silero VAD and the classifier both expect the model sampling rate.
+    target_sr = 16000
+    if sr != target_sr:
+        data = librosa.resample(
+            data.astype(np.float32),
+            orig_sr=sr,
+            target_sr=target_sr,
+        ).astype(np.float32)
+        sr = target_sr
+
     if call_id not in stream_buffer.active_buffers:
         stream_buffer.active_buffers[call_id] = []
     stream_buffer.active_buffers[call_id].append(data)
-    continuous_audio = stream_buffer.active_buffers[call_id][-1]
+    continuous_audio = np.concatenate(stream_buffer.active_buffers[call_id])
 
     clean_audio, prosody_metrics = vad_filter.extract_speech_and_metrics(
         continuous_audio, samplerate=sr

@@ -22,48 +22,41 @@ class AudioProcessor extends AudioWorkletProcessor {
             return true;
         }
 
-        /*
-         * input contains one Float32Array per audio channel.
-         *
-         * We convert everything to mono because the voice
-         * detection model only needs a single speech channel.
-         */
+        const channelCount = input.length;
+        const frameCount = input[0]?.length;
 
-        const leftChannel = input[0];
-
-        if (!leftChannel) {
+        if (!frameCount) {
             return true;
         }
 
         let samples;
 
-        // Mono input
-        if (input.length === 1) {
-            samples = new Float32Array(leftChannel.length);
-            samples.set(leftChannel);
+        // Already mono
+        if (channelCount === 1) {
+            // Copy because the AudioWorklet input buffer
+            // is only valid for the current process callback.
+            samples = new Float32Array(frameCount);
+            samples.set(input[0]);
         }
 
-        // Stereo / multi-channel input
+        // Convert multi-channel audio to mono
         else {
-            const frameCount = leftChannel.length;
-
             samples = new Float32Array(frameCount);
 
             for (let i = 0; i < frameCount; i++) {
                 let sum = 0;
 
-                for (let channel = 0; channel < input.length; channel++) {
-                    sum += input[channel]?.[i] || 0;
+                for (let channel = 0; channel < channelCount; channel++) {
+                    sum += input[channel][i];
                 }
 
-                samples[i] = sum / input.length;
+                samples[i] =
+                    sum / channelCount;
             }
         }
 
-        /*
-         * Transfer the ArrayBuffer instead of copying it again
-         * when it reaches the main thread.
-         */
+        // Transfer ownership instead of copying
+        // the audio buffer to the main thread.
         this.port.postMessage(
             samples,
             [samples.buffer]

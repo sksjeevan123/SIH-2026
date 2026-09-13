@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.websocket_router import router
+from app.api.websocket_router import router  # Changed back to app.api
 
 app = FastAPI(title="Voice Anti-Spoofing API")
 
@@ -12,5 +12,4 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount your routing channel
 app.include_router(router)

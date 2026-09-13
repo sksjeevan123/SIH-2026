@@ -147,7 +147,7 @@ async def analyze_voice_authenticity(
     # Step 6: Risk level assignment
     if risk_score > 75:
         risk_level = "HIGH_RISK_CLONE"
-    elif risk_score > 45:
+    elif risk_score > 32:
         risk_level = "SUSPICIOUS"
     else:
         risk_level = "AUTHENTIC_HUMAN"

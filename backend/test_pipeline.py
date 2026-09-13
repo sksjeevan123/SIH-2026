@@ -1,45 +1,78 @@
-import asyncio
-import librosa
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+import logging
+import json
 import numpy as np
-import os
+
 from app.audio.feature_extractor import FeatureExtractor
-from app.audio.vad_filter import VADFilter
 from app.ml.inference import analyze_voice_authenticity
 from RobustAudioCleaner import RobustAudioCleaner
 
-async def test_custom_audio_pipeline():
-    print("--- Initializing Custom Audio Pipeline Test ---")
+router = APIRouter()
+logger = logging.getLogger(__name__)
 
-    audio_path = r"D:\Voice\SIH-2026\backend\test_voiceai1.wav"
-    target_sr = 16000
+SECURE_API_KEY = "voice_sih_2026_secure_key_99"
 
-    print(f"Loading audio file: {audio_path}...")
-    audio_array, sample_rate = librosa.load(audio_path, sr=target_sr, mono=True)
-    print(f"Loaded {len(audio_array)} samples ({len(audio_array)/sample_rate:.2f}s at {sample_rate}Hz)")
-
-    # Run VAD first, same as production
-    print("\n[Step 1/3] Running VAD...")
-    cleaner = RobustAudioCleaner(target_samplerate=16000)
-    clean_audio, prosody = cleaner.clean(audio_array, samplerate=16000)
-    #clean_audio, prosody = vad.extract_speech_and_metrics(audio_array, samplerate=sample_rate)
-    if clean_audio is None:
-        print("No speech detected.")
+@router.websocket("/api/ws/audio")
+async def audio_websocket(
+    websocket: WebSocket,
+    x_api_key: str = Query(None)
+):
+    if x_api_key != SECURE_API_KEY:
+        await websocket.close(code=4003, reason="Unauthorized API Key")
+        logger.warning("Rejected WebSocket connection due to invalid API key.")
         return
-    print(f"Speech-only audio: {clean_audio.shape}, prosody={prosody}")
 
-    # Extract components ONCE, reuse for both matrix + ensemble
-    print("\n[Step 2/3] Running Feature Extractor (MFCC, F0, CQT)...")
-    extractor = FeatureExtractor(samplerate=sample_rate)
-    components = extractor.extract_components(clean_audio)
-    feature_matrix = extractor.extract_and_stack(clean_audio, components=components)
-    print(f"Feature extraction successful! Output shape: {feature_matrix.shape}")
+    await websocket.accept()
+    logger.info("connection open")
 
-    print("\n[Step 3/3] Running ML Inference (ensemble)...")
-    result = await analyze_voice_authenticity(
-        clean_audio, sample_rate=sample_rate, feature_components=components
-    )
-    for key, value in result.items():
-        print(f"  - {key}: {value}")
+    # Initialize components
+    cleaner = RobustAudioCleaner(target_samplerate=16000)
+    extractor = FeatureExtractor(samplerate=16000)
 
-if __name__ == "__main__":
-    asyncio.run(test_custom_audio_pipeline())
+    try:
+        while True:
+            # 1. Receive raw PCM16 bytes from Android app chunk stream
+            audio_bytes = await websocket.receive_bytes()
+            
+            # 2. Convert raw PCM16 bytes to numpy float array (matching librosa/audio pipeline input)
+            audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+
+            if len(audio_array) == 0:
+                continue
+
+            # 3. Run VAD / Audio Cleaner
+            clean_audio, prosody = cleaner.clean(audio_array, samplerate=16000)
+            if clean_audio is None or len(clean_audio) == 0:
+                response_payload = {"status": "filtered"}
+                await websocket.send_text(json.dumps(response_payload))
+                continue
+
+            # 4. Extract Feature Components
+            components = extractor.extract_components(clean_audio)
+
+            # 5. Run ML Inference
+            result = await analyze_voice_authenticity(
+                clean_audio, sample_rate=16000, feature_components=components
+            )
+
+            # Map the result keys to match CallActivity's formatRiskText parser
+            # Adjust keys here if your `analyze_voice_authenticity` output keys differ
+            score = result.get("risk_score", result.get("score", 0.0))
+            level = result.get("risk_level", result.get("level", "LOW"))
+
+            response_payload = {
+                "status": "success",
+                "ml_inference": {
+                    "risk_score": float(score),
+                    "risk_level": str(level)
+                }
+            }
+
+            await websocket.send_text(json.dumps(response_payload))
+
+    except WebSocketDisconnect:
+        logger.info("connection closed by client")
+    except Exception as e:
+        logger.error(f"WebSocket error: {str(e)}")
+    finally:
+        logger.info("WebSocket session terminated.")

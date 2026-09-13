@@ -1,0 +1,15 @@
+<resources>
+    <color name="purple_500">#1F6BFF</color>
+    <color name="teal_700">#1648B5</color>
+    <color name="ink_900">#10233F</color>
+    <color name="ink_600">#50627A</color>
+    <color name="blue_600">#1F6BFF</color>
+    <color name="blue_100">#E7F0FF</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="canvas">#F4F7FB</color>
+    <color name="night_950">#081321</color>
+    <color name="night_900">#10233F</color>
+    <color name="danger_600">#E14D5A</color>
+    <color name="black">#000000</color>
+    <color name="white">#FFFFFF</color>
+</resources>
